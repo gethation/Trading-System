@@ -330,7 +330,7 @@ class Config:
     # live
     poll_sec: float = 1.0
     auth_path: str = "auth.json"
-    headless: bool = False
+    headless: bool = True
     show_tick_refresh: bool = True
 
     # one-time calibration (from TradingView / KCEX)
@@ -421,6 +421,9 @@ class LiveMeanReversionTrader:
 
         if cfg.init_pos not in (None, "LONG_SPREAD", "SHORT_SPREAD"):
             raise ValueError(f"invalid init_pos: {cfg.init_pos}")
+
+        self.pos = cfg.init_pos
+
 
         # cross detection (use 1m close(mid) vs mean BEFORE push)
         self.prev_diff_close: Optional[float] = None
@@ -652,9 +655,9 @@ class LiveMeanReversionTrader:
             mean_pre, _std_pre = self.stats.mean_std()
             if math.isfinite(mean_pre) and math.isfinite(ratio_close_mid):
                 diff_close = ratio_close_mid - mean_pre
-                if self.prev_diff_close is not None and math.isfinite(self.prev_diff_close):
-                    cross_up = (self.prev_diff_close <= 0.0 and diff_close > 0.0)
-                    cross_down = (self.prev_diff_close >= 0.0 and diff_close < 0.0)
+                # if self.prev_diff_close is not None and math.isfinite(self.prev_diff_close):
+                #     cross_up = diff_close > 0.0
+                #     cross_down = diff_close < 0.0
                 self.prev_diff_close = diff_close
 
             self.stats.push(ratio_close_mid)
@@ -710,8 +713,6 @@ class LiveMeanReversionTrader:
                     "mean": float(mean),
                     "std": float(std),
                     "z_mid": float(z_close_mid) if z_close_mid is not None else None,
-                    "cross_up": 1 if cross_up else 0,
-                    "cross_down": 1 if cross_down else 0,
                     "pos": self.pos,
                     "ratio_exec_L": float(ratio_exec_L) if math.isfinite(ratio_exec_L) else None,
                     "ratio_exec_S": float(ratio_exec_S) if math.isfinite(ratio_exec_S) else None,

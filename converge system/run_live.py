@@ -9,27 +9,27 @@ UTC = dt.timezone.utc
 
 def main():
     cfg = Config(
-        lookback=1000,
+        lookback=500,
         extra=300,
-        entry_z=0.5,
-        exit_buffer_z=-0.1,
-        stop_z=5.0,
-        leg_usdt=0.0,
+        entry_z=2.0,
+        exit_buffer_z=0.2,
+        stop_z=30.0,
+        leg_usdt=10.0,
         leverage="40",
         margin_mode="Cross",
         poll_sec=1.0,
         auth_path="auth.json",
-        headless=True,
+        headless=False,
         show_tick_refresh=True,
         # one-time calibration (optional)
-        kcex_mean=411/1000,
-        kcex_std=26.3/1000,
+        kcex_mean=472/1000,
+        kcex_std=202/1000,
         min_trade_interval_sec=3.0,
         # logging
         db_path=r"log\live_ratio_trader.sqlite",
         run_id = None,
         run_note=None,
-        init_pos=None  # None / "LONG_SPREAD" / "SHORT_SPREAD"
+        init_pos="LONG_SPREAD"  # None / "LONG_SPREAD" / "SHORT_SPREAD"
     )
 
     # run id

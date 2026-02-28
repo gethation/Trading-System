@@ -184,7 +184,12 @@ def main() -> None:
     print(merged.head(args.show_head).to_string(index=False))
 
     if args.csv_out:
-        merged.to_csv(args.csv_out, index=False)
+        merged_out = merged.copy()
+
+        float_cols = merged_out.select_dtypes(include=["float", "float64", "float32"]).columns
+        merged_out[float_cols] = merged_out[float_cols].round(2)
+
+        merged_out.to_csv(args.csv_out, index=False)
         print(f"\n[export] wrote {args.csv_out}")
 
     con.close()
