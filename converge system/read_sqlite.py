@@ -186,6 +186,7 @@ def main() -> None:
     if args.csv_out:
         merged_out = merged.copy()
 
+
         float_cols = merged_out.select_dtypes(include=["float", "float64", "float32"]).columns
         merged_out[float_cols] = merged_out[float_cols].round(2)
 

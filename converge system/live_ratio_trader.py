@@ -655,9 +655,9 @@ class LiveMeanReversionTrader:
             mean_pre, _std_pre = self.stats.mean_std()
             if math.isfinite(mean_pre) and math.isfinite(ratio_close_mid):
                 diff_close = ratio_close_mid - mean_pre
-                # if self.prev_diff_close is not None and math.isfinite(self.prev_diff_close):
-                #     cross_up = diff_close > 0.0
-                #     cross_down = diff_close < 0.0
+                if self.prev_diff_close is not None and math.isfinite(self.prev_diff_close):
+                    cross_up = diff_close > 0.0
+                    cross_down = diff_close < 0.0
                 self.prev_diff_close = diff_close
 
             self.stats.push(ratio_close_mid)

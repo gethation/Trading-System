@@ -4,6 +4,7 @@ from typing import Dict, Any
 import datetime as dt
 import time
 import uuid
+import os
 UTC = dt.timezone.utc
 
 
@@ -12,24 +13,24 @@ def main():
         lookback=500,
         extra=300,
         entry_z=2.0,
-        exit_buffer_z=0.2,
+        exit_buffer_z=1.0,
         stop_z=30.0,
-        leg_usdt=10.0,
+        leg_usdt=2000.0,
         leverage="40",
         margin_mode="Cross",
         poll_sec=1.0,
         auth_path="auth.json",
-        headless=False,
+        headless=True,
         show_tick_refresh=True,
         # one-time calibration (optional)
-        kcex_mean=472/1000,
-        kcex_std=202/1000,
+        kcex_mean=870/1000,
+        kcex_std=327/1000,
         min_trade_interval_sec=3.0,
         # logging
         db_path=r"log\live_ratio_trader.sqlite",
         run_id = None,
         run_note=None,
-        init_pos="LONG_SPREAD"  # None / "LONG_SPREAD" / "SHORT_SPREAD"
+        init_pos=None  # None / "LONG_SPREAD" / "SHORT_SPREAD"
     )
 
     # run id
@@ -70,6 +71,14 @@ def main():
 
     # start KCEX workers
     k.start(["PAXG", "XAUT"])
+
+    shot_dir = "screens"
+    os.makedirs(shot_dir, exist_ok=True)
+    shot_paths = {
+        "PAXG": os.path.join(shot_dir, r"PAXG_latest.png"),
+        "XAUT": os.path.join(shot_dir, r"XAUT_latest.png"),
+    }
+    last_capture_minute = None
     print(f"[live] start tick loop ... (Ctrl+C to stop) | run_id={run_id} db={cfg.db_path}", flush=True)
 
     try:
@@ -87,6 +96,16 @@ def main():
                 x_bid=float(x.bid_price),
                 x_ask=float(x.ask_price),
             )
+            cur_minute = int(float(p.ts) // 60)
+            if cur_minute != last_capture_minute:
+                last_capture_minute = cur_minute
+                try:
+                    _ = k.capture_pages(shot_paths, full_page=False)
+                except Exception as e:
+                    log_line(
+                        f"[shot] capture failed: {e}",
+                        tick_refresh=cfg.show_tick_refresh,
+                    )
 
             time.sleep(cfg.poll_sec)
     finally:

@@ -197,6 +197,22 @@ class _SymbolWorker(threading.Thread):
             source=source,
             ts=time.time(),
         )
+    
+    # ---- screenshot ----
+    def _capture_page(self, path: Optional[str] = None, full_page: bool = False) -> Optional[str]:
+        assert self.page is not None
+        page = self.page
+
+        out_path = path or f"{self.symbol}_latest.png"
+        out_dir = os.path.dirname(out_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+
+        try:
+            page.screenshot(path=out_path, full_page=full_page)
+            return out_path
+        except:
+            return None
 
     # ---- trading ----
     def _place_order(
@@ -385,8 +401,11 @@ class _SymbolWorker(threading.Thread):
                     req.fut.set_result(self._get_snapshot())
                 elif req.op == "place_order":
                     req.fut.set_result(self._place_order(**req.kwargs))
+                elif req.op == "capture_page":
+                    req.fut.set_result(self._capture_page(**req.kwargs))
                 else:
                     req.fut.set_exception(RuntimeError(f"unknown op: {req.op}"))
+
             except Exception as e:
                 req.fut.set_exception(e)
 
@@ -579,6 +598,37 @@ class KCEXTool:
             take_screenshot=take_screenshot,
         )
         return fut.result(timeout=60)
+
+    def capture_page(
+        self,
+        symbol: str,
+        path: Optional[str] = None,
+        full_page: bool = False,
+    ) -> Optional[str]:
+        sym = self._norm_symbol(symbol)
+        w = self.workers[sym]
+        fut = w.submit(
+            "capture_page",
+            path=path,
+            full_page=full_page,
+        )
+        return fut.result(timeout=30)
+
+    def capture_pages(
+        self,
+        paths: Dict[str, str],
+        full_page: bool = False,
+    ) -> Dict[str, Optional[str]]:
+        futs: Dict[str, Future] = {}
+        for symbol, path in paths.items():
+            sym = self._norm_symbol(symbol)
+            futs[sym] = self.workers[sym].submit(
+                "capture_page",
+                path=path,
+                full_page=full_page,
+            )
+        wait(list(futs.values()), timeout=30)
+        return {sym: fut.result() for sym, fut in futs.items()}
 
     def two_legs_trade(
         self,
