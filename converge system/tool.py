@@ -40,6 +40,13 @@ class OrderResult:
 
 
 @dataclass
+class UIHealthResult:
+    symbol: str
+    ok: bool
+    error: Optional[str] = None
+
+
+@dataclass
 class _Req:
     op: str
     kwargs: Dict[str, Any]
@@ -213,6 +220,127 @@ class _SymbolWorker(threading.Thread):
             return out_path
         except:
             return None
+
+    def _dismiss_blocking_modal(self) -> bool:
+        assert self.page is not None
+        page = self.page
+        dismissed = False
+
+        try:
+            modal = page.locator("div.ant-modal-wrap").filter(visible=True).last
+            if modal.count() == 0:
+                return False
+
+            close_selectors = [
+                "button.ant-modal-close",
+                ".ant-modal-close",
+                ".ant-modal-close-x",
+                "button[aria-label='Close']",
+            ]
+
+            for sel in close_selectors:
+                try:
+                    btn = modal.locator(sel).filter(visible=True).first
+                    if btn.count() > 0:
+                        btn.click(timeout=1500)
+                        time.sleep(0.2)
+                        dismissed = True
+                        break
+                except:
+                    pass
+
+            if not dismissed:
+                try:
+                    page.keyboard.press("Escape")
+                    time.sleep(0.2)
+                    dismissed = True
+                except:
+                    pass
+        except:
+            pass
+
+        return dismissed
+
+    def _health_check_ui(
+        self,
+        action: Action = "open",
+        order_type: OrderType = "market",
+        side: Side = "long",
+    ) -> UIHealthResult:
+        assert self.page is not None
+        page = self.page
+
+        try:
+            trade_panel = page.locator("#kcex-web-inspection-futures-exchange-orderForm")
+            trade_panel.wait_for(state="visible", timeout=5000)
+
+            # 先嘗試關掉已知的 blocking modal（像你截圖那種 ant-modal）
+            self._dismiss_blocking_modal()
+
+            blocking_modal = page.locator("div.ant-modal-wrap").filter(visible=True)
+            if blocking_modal.count() > 0:
+                return UIHealthResult(
+                    symbol=self.symbol,
+                    ok=False,
+                    error="blocking modal still visible before order",
+                )
+
+            # 1) open / close tab
+            action_tab = trade_panel.locator("div[class*='handle_tabs'] span").filter(
+                has_text=action.capitalize()
+            ).first
+            action_tab.click(trial=True, timeout=2000)
+
+            # 2) market / limit tab
+            if order_type == "market":
+                order_tab = trade_panel.get_by_text("Market", exact=True).filter(visible=True).first
+            else:
+                order_tab = trade_panel.get_by_text("Limit", exact=True).filter(visible=True).first
+            order_tab.click(trial=True, timeout=2000)
+
+            # 3) unit selector (只檢查可操作，不真的切換)
+            unit_selector = trade_panel.locator("div[class*='UnitSelect_wrapper']").filter(visible=True).first
+            unit_selector.wait_for(state="visible", timeout=3000)
+            unit_selector.click(trial=True, timeout=2000)
+
+            # 4) margin / leverage controls
+            leverage_btns = trade_panel.locator("span[class*='LeverageEdit_leverageText']").filter(visible=True)
+            margin_btn = leverage_btns.nth(0)
+            lev_btn = leverage_btns.nth(1)
+
+            margin_btn.wait_for(state="visible", timeout=3000)
+            margin_btn.click(trial=True, timeout=2000)
+
+            lev_btn.wait_for(state="visible", timeout=3000)
+            lev_btn.click(trial=True, timeout=2000)
+
+            # 5) qty input
+            visible_inputs = trade_panel.locator(".ant-input").filter(visible=True)
+            need_inputs = 2 if order_type == "limit" else 1
+            if visible_inputs.count() < need_inputs:
+                return UIHealthResult(
+                    symbol=self.symbol,
+                    ok=False,
+                    error=f"visible input count not enough: need={need_inputs}",
+                )
+
+            qty_input = visible_inputs.nth(1 if order_type == "limit" else 0)
+            qty_input.click(trial=True, timeout=2000)
+
+            # 6) submit button
+            if action == "open":
+                btn_text = "Open Long" if side == "long" else "Open Short"
+            else:
+                btn_text = "Close Long" if side == "long" else "Close Short"
+
+            submit_btn = trade_panel.locator("button").filter(has_text=btn_text, visible=True).first
+            submit_btn.wait_for(state="visible", timeout=3000)
+            submit_btn.click(trial=True, timeout=2000)
+
+            return UIHealthResult(symbol=self.symbol, ok=True)
+
+        except Exception as e:
+            return UIHealthResult(symbol=self.symbol, ok=False, error=str(e))
 
     # ---- trading ----
     def _place_order(
@@ -399,6 +527,8 @@ class _SymbolWorker(threading.Thread):
             try:
                 if req.op == "get_snapshot":
                     req.fut.set_result(self._get_snapshot())
+                elif req.op == "health_check_ui":
+                    req.fut.set_result(self._health_check_ui(**req.kwargs))
                 elif req.op == "place_order":
                     req.fut.set_result(self._place_order(**req.kwargs))
                 elif req.op == "capture_page":
@@ -570,6 +700,72 @@ class KCEXTool:
         return {sym: fut.result() for sym, fut in futs.items()}
 
     # ---- orders ----
+    def health_check_ui(
+        self,
+        symbol: str,
+        action: Action = "open",
+        order_type: OrderType = "market",
+        side: Side = "long",
+    ) -> UIHealthResult:
+        sym = self._norm_symbol(symbol)
+        if sym not in self.workers:
+            self.start([sym])
+
+        w = self.workers[sym]
+        fut = w.submit(
+            "health_check_ui",
+            action=action,
+            order_type=order_type,
+            side=side,
+        )
+        return fut.result(timeout=20)
+
+    @staticmethod
+    def _health_fail_to_order_result(health: UIHealthResult) -> OrderResult:
+        msg = health.error or "unknown ui health check error"
+        return OrderResult(
+            symbol=health.symbol,
+            ok=False,
+            error=f"Pre-trade UI health check failed: {msg}",
+        )
+
+    def _active_symbols_or(self, fallback: List[str]) -> List[str]:
+        if self.workers:
+            return list(self.workers.keys())
+        return fallback
+
+    def _health_check_pair_for_two_legs(
+        self,
+        strategy: Literal["long_paxg", "short_paxg"],
+        action: Action,
+        order_type: OrderType,
+    ) -> Dict[str, UIHealthResult]:
+        if strategy == "long_paxg":
+            paxg_side: Side = "long"
+            xaut_side: Side = "short"
+        else:
+            paxg_side = "short"
+            xaut_side = "long"
+
+        f1 = self.workers["PAXG"].submit(
+            "health_check_ui",
+            action=action,
+            order_type=order_type,
+            side=paxg_side,
+        )
+        f2 = self.workers["XAUT"].submit(
+            "health_check_ui",
+            action=action,
+            order_type=order_type,
+            side=xaut_side,
+        )
+
+        wait([f1, f2], timeout=20)
+        return {
+            "PAXG": f1.result(),
+            "XAUT": f2.result(),
+        }
+
     def place_order(
         self,
         symbol: str,
@@ -583,6 +779,26 @@ class KCEXTool:
         take_screenshot: bool = True,
     ) -> OrderResult:
         sym = self._norm_symbol(symbol)
+        if sym not in self.workers:
+            self.start([sym])
+
+        health = self.health_check_ui(
+            sym,
+            action=action,
+            order_type=order_type,
+            side=side,
+        )
+        if not health.ok:
+            self.refresh(self._active_symbols_or([sym]))
+            health = self.health_check_ui(
+                sym,
+                action=action,
+                order_type=order_type,
+                side=side,
+            )
+            if not health.ok:
+                return self._health_fail_to_order_result(health)
+
         w = self.workers[sym]
         fut = w.submit(
             "place_order",
@@ -647,9 +863,28 @@ class KCEXTool:
         保留你要的「多 thread 同時點擊」：
         - 兩個 worker thread 各自操作自己的 page
         - 用 Barrier 在 submit 前同步
+        - 但在真正下單前，先做一次快速 UI health check
         """
         if "PAXG" not in self.workers or "XAUT" not in self.workers:
             self.start(["PAXG", "XAUT"])
+
+        health = self._health_check_pair_for_two_legs(
+            strategy=strategy,
+            action=action,
+            order_type=order_type,
+        )
+        if not (health["PAXG"].ok and health["XAUT"].ok):
+            self.refresh(["PAXG", "XAUT"])
+            health = self._health_check_pair_for_two_legs(
+                strategy=strategy,
+                action=action,
+                order_type=order_type,
+            )
+            if not (health["PAXG"].ok and health["XAUT"].ok):
+                return {
+                    "PAXG": self._health_fail_to_order_result(health["PAXG"]),
+                    "XAUT": self._health_fail_to_order_result(health["XAUT"]),
+                }
 
         barrier = threading.Barrier(2)
 
