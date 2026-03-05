@@ -43,11 +43,11 @@ def main():
         margin_mode="Cross",
         poll_sec=1.0,
         auth_path="auth.json",
-        headless=False,
+        headless=True,
         show_tick_refresh=True,
         # one-time calibration (optional)
-        kcex_mean=640 / 1000,
-        kcex_std=35 / 1000,
+        kcex_mean=632 / 1000,
+        kcex_std=46 / 1000,
         min_trade_interval_sec=3.0,
         # logging
         db_path=r"log\live_ratio_trader.sqlite",

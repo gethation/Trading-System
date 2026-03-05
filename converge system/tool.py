@@ -267,6 +267,12 @@ class _SymbolWorker(threading.Thread):
         order_type: OrderType = "market",
         side: Side = "long",
     ) -> UIHealthResult:
+        """
+        快速 UI 健康檢查（下單前用）：
+        - 會「真的點」Open/Close、Market/Limit 來切到正確分頁（安全，因為不會送單）
+        - qty / submit 使用 trial click，確保可操作但不真的送出
+        - 若有 blocking modal 會嘗試關閉；仍存在就判定失敗
+        """
         assert self.page is not None
         page = self.page
 
@@ -285,36 +291,24 @@ class _SymbolWorker(threading.Thread):
                     error="blocking modal still visible before order",
                 )
 
-            # 1) open / close tab
+            # 1) open / close tab：必須真的 click 才會切換分頁（trial 不會改變 UI 狀態）
             action_tab = trade_panel.locator("div[class*='handle_tabs'] span").filter(
                 has_text=action.capitalize()
             ).first
-            action_tab.click(trial=True, timeout=2000)
+            action_tab.wait_for(state="visible", timeout=2000)
+            action_tab.click(timeout=2000)
+            time.sleep(0.10)
 
-            # 2) market / limit tab
+            # 2) market / limit tab：同樣用真的 click 切換（安全）
             if order_type == "market":
                 order_tab = trade_panel.get_by_text("Market", exact=True).filter(visible=True).first
             else:
                 order_tab = trade_panel.get_by_text("Limit", exact=True).filter(visible=True).first
-            order_tab.click(trial=True, timeout=2000)
+            order_tab.wait_for(state="visible", timeout=2000)
+            order_tab.click(timeout=2000)
+            time.sleep(0.10)
 
-            # 3) unit selector (只檢查可操作，不真的切換)
-            unit_selector = trade_panel.locator("div[class*='UnitSelect_wrapper']").filter(visible=True).first
-            unit_selector.wait_for(state="visible", timeout=3000)
-            unit_selector.click(trial=True, timeout=2000)
-
-            # 4) margin / leverage controls
-            leverage_btns = trade_panel.locator("span[class*='LeverageEdit_leverageText']").filter(visible=True)
-            margin_btn = leverage_btns.nth(0)
-            lev_btn = leverage_btns.nth(1)
-
-            margin_btn.wait_for(state="visible", timeout=3000)
-            margin_btn.click(trial=True, timeout=2000)
-
-            lev_btn.wait_for(state="visible", timeout=3000)
-            lev_btn.click(trial=True, timeout=2000)
-
-            # 5) qty input
+            # 3) qty input（只檢查可操作，不輸入、不送出）
             visible_inputs = trade_panel.locator(".ant-input").filter(visible=True)
             need_inputs = 2 if order_type == "limit" else 1
             if visible_inputs.count() < need_inputs:
@@ -325,9 +319,9 @@ class _SymbolWorker(threading.Thread):
                 )
 
             qty_input = visible_inputs.nth(1 if order_type == "limit" else 0)
-            qty_input.click(trial=True, timeout=2000)
+            qty_input.click(trial=True, timeout=1500)
 
-            # 6) submit button
+            # 4) submit button（trial click：確保不被彈窗/overlay 擋住）
             if action == "open":
                 btn_text = "Open Long" if side == "long" else "Open Short"
             else:
@@ -335,7 +329,7 @@ class _SymbolWorker(threading.Thread):
 
             submit_btn = trade_panel.locator("button").filter(has_text=btn_text, visible=True).first
             submit_btn.wait_for(state="visible", timeout=3000)
-            submit_btn.click(trial=True, timeout=2000)
+            submit_btn.click(trial=True, timeout=1500)
 
             return UIHealthResult(symbol=self.symbol, ok=True)
 
