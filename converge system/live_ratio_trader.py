@@ -325,7 +325,7 @@ class Config:
     order_type: str = "market"
     margin_mode: str = "Cross"
     leverage: str = "20"
-    take_screenshot: bool = False
+    take_screenshot: bool = True
 
     # live
     poll_sec: float = 1.0

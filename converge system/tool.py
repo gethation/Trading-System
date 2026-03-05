@@ -297,7 +297,6 @@ class _SymbolWorker(threading.Thread):
             ).first
             action_tab.wait_for(state="visible", timeout=2000)
             action_tab.click(timeout=2000)
-            time.sleep(0.10)
 
             # 2) market / limit tab：同樣用真的 click 切換（安全）
             if order_type == "market":
@@ -306,11 +305,17 @@ class _SymbolWorker(threading.Thread):
                 order_tab = trade_panel.get_by_text("Limit", exact=True).filter(visible=True).first
             order_tab.wait_for(state="visible", timeout=2000)
             order_tab.click(timeout=2000)
-            time.sleep(0.10)
 
             # 3) qty input（只檢查可操作，不輸入、不送出）
             visible_inputs = trade_panel.locator(".ant-input").filter(visible=True)
             need_inputs = 2 if order_type == "limit" else 1
+
+            # 等到至少 need_inputs 個 input 可見（取代 time.sleep）
+            try:
+                visible_inputs.nth(need_inputs - 1).wait_for(state="visible", timeout=2000)
+            except Exception:
+                pass
+
             if visible_inputs.count() < need_inputs:
                 return UIHealthResult(
                     symbol=self.symbol,
@@ -336,7 +341,6 @@ class _SymbolWorker(threading.Thread):
         except Exception as e:
             return UIHealthResult(symbol=self.symbol, ok=False, error=str(e))
 
-    # ---- trading ----
     def _place_order(
         self,
         action: Action,
@@ -357,7 +361,7 @@ class _SymbolWorker(threading.Thread):
             if not take_screenshot:
                 return None
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            path = f"{self.symbol}_{name}_{ts}.png"
+            path = rf"trading capture\{self.symbol}_{name}_{ts}.png"
             try:
                 page.screenshot(path=path)
                 return path
@@ -370,15 +374,16 @@ class _SymbolWorker(threading.Thread):
 
             # 1) open/close tab
             action_tab = trade_panel.locator("div[class*='handle_tabs'] span").filter(has_text=action.capitalize()).first
+            action_tab.wait_for(state="visible", timeout=5000)
             action_tab.click()
-            time.sleep(0.15)
 
             # 2) market/limit tab
             if order_type == "market":
-                trade_panel.get_by_text("Market", exact=True).filter(visible=True).first.click()
+                order_tab = trade_panel.get_by_text("Market", exact=True).filter(visible=True).first
             else:
-                trade_panel.get_by_text("Limit", exact=True).filter(visible=True).first.click()
-            time.sleep(0.15)
+                order_tab = trade_panel.get_by_text("Limit", exact=True).filter(visible=True).first
+            order_tab.wait_for(state="visible", timeout=5000)
+            order_tab.click()
 
             # 3) unit => USDT
             unit_selector = trade_panel.locator("div[class*='UnitSelect_wrapper']").filter(visible=True).first
@@ -390,7 +395,21 @@ class _SymbolWorker(threading.Thread):
                 dlg.wait_for(state="visible", timeout=5000)
                 dlg.get_by_text("USDT", exact=True).first.click()
                 dlg.get_by_role("button", name="Confirm").click()
-                time.sleep(0.15)
+
+                # 等 unit 文字真的更新成 USDT（取代 time.sleep）
+                try:
+                    page.wait_for_function(
+                        """() => {
+                            const root = document.querySelector("#kcex-web-inspection-futures-exchange-orderForm");
+                            if (!root) return false;
+                            const els = Array.from(root.querySelectorAll("div[class*='UnitSelect_wrapper']")).filter(e => e.offsetParent !== null);
+                            if (els.length < 1) return false;
+                            return (els[0].innerText || "").includes("USDT");
+                        }""",
+                        timeout=3000,
+                    )
+                except Exception:
+                    pass
 
             # 4) margin/leverage
             leverage_btns = trade_panel.locator("span[class*='LeverageEdit_leverageText']").filter(visible=True)
@@ -403,7 +422,26 @@ class _SymbolWorker(threading.Thread):
                 dlg = page.get_by_role("dialog")
                 dlg.get_by_text(margin_mode, exact=True).click()
                 dlg.get_by_role("button", name="Confirm").click()
-                time.sleep(0.15)
+
+                # 等 dialog 關閉 + margin 文字更新（取代 time.sleep）
+                try:
+                    dlg.wait_for(state="hidden", timeout=5000)
+                except Exception:
+                    pass
+                try:
+                    page.wait_for_function(
+                        """(target) => {
+                            const root = document.querySelector("#kcex-web-inspection-futures-exchange-orderForm");
+                            if (!root) return false;
+                            const els = Array.from(root.querySelectorAll("span[class*='LeverageEdit_leverageText']")).filter(e => e.offsetParent !== null);
+                            if (els.length < 1) return false;
+                            return (els[0].innerText || "").toLowerCase().includes(String(target).toLowerCase());
+                        }""",
+                        margin_mode,
+                        timeout=3000,
+                    )
+                except Exception:
+                    pass
 
             lev_btn.wait_for(state="visible", timeout=5000)
             lev_text = (lev_btn.inner_text() or "").strip()
@@ -415,10 +453,40 @@ class _SymbolWorker(threading.Thread):
                 lev_input = page.locator("input[class*='LeverageProgress_leverageInput']")
                 lev_input.fill(str(leverage))
                 page.get_by_role("dialog").get_by_role("button", name="Confirm").click()
-                time.sleep(0.15)
+
+                # 等 dialog 關閉 + leverage 文字更新（取代 time.sleep）
+                try:
+                    page.get_by_role("dialog").wait_for(state="hidden", timeout=5000)
+                except Exception:
+                    pass
+                try:
+                    page.wait_for_function(
+                        """(lev) => {
+                            const root = document.querySelector("#kcex-web-inspection-futures-exchange-orderForm");
+                            if (!root) return false;
+                            const els = Array.from(root.querySelectorAll("span[class*='LeverageEdit_leverageText']")).filter(e => e.offsetParent !== null);
+                            if (els.length < 2) return false;
+                            const t = (els[1].innerText || "").trim();
+                            const m = t.match(/[\d\.]+/);
+                            if (!m) return false;
+                            return Math.abs(parseFloat(m[0]) - parseFloat(lev)) < 1e-9;
+                        }""",
+                        str(leverage),
+                        timeout=3000,
+                    )
+                except Exception:
+                    pass
 
             # 5) fill inputs
             visible_inputs = trade_panel.locator(".ant-input").filter(visible=True)
+
+            # 等到需要的 input 數量可見（取代 tab 切換後的 sleep）
+            need_inputs = 2 if order_type == "limit" else 1
+            try:
+                visible_inputs.nth(need_inputs - 1).wait_for(state="visible", timeout=3000)
+            except Exception:
+                pass
+
             if order_type == "limit":
                 price_input = visible_inputs.nth(0)
                 price_input.click()
@@ -445,6 +513,7 @@ class _SymbolWorker(threading.Thread):
                 btn_text = "Close Long" if side == "long" else "Close Short"
 
             submit_btn = trade_panel.locator("button").filter(has_text=btn_text, visible=True).first
+            submit_btn.wait_for(state="visible", timeout=5000)
 
             if barrier is not None:
                 try:
@@ -459,10 +528,36 @@ class _SymbolWorker(threading.Thread):
                 confirm_btn = page.get_by_role("button", name="Confirm").last
                 if confirm_btn.is_visible(timeout=2000):
                     confirm_btn.click()
+                    # 等 dialog 關閉，避免立刻截圖截到彈窗
+                    try:
+                        page.get_by_role("dialog").last.wait_for(state="hidden", timeout=5000)
+                    except Exception:
+                        pass
             except:
                 pass
 
-            time.sleep(1.2)
+            # 8) 等 UI 反應（取代 time.sleep）：toast 出現或 submit 不再 loading/disabled
+            try:
+                page.wait_for_function(
+                    """(btnText) => {
+                        const toast = document.querySelector(".ant-message") || document.querySelector(".ant-notification");
+                        if (toast && toast.offsetParent !== null) return true;
+
+                        const root = document.querySelector("#kcex-web-inspection-futures-exchange-orderForm");
+                        if (!root) return false;
+                        const btn = Array.from(root.querySelectorAll("button")).find(b => (b.innerText || "").includes(btnText) && b.offsetParent !== null);
+                        if (!btn) return false;
+                        const cls = btn.className || "";
+                        const disabled = !!btn.disabled || btn.getAttribute("disabled") !== null;
+                        const loading = cls.includes("ant-btn-loading");
+                        return !disabled && !loading;
+                    }""",
+                    btn_text,
+                    timeout=1500,
+                )
+            except Exception:
+                pass
+
             return OrderResult(symbol=self.symbol, ok=True, screenshot=shot("OK"))
 
         except Exception as e:
